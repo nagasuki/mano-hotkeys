@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv11', 'ss01';
+}
+
+/* Drag region for the custom titlebar */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Hide scrollbar visually, keep functionality */
+.scroll-soft::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-soft::-webkit-scrollbar-thumb {
+  background: rgb(51 51 61 / 0.6);
+  border-radius: 4px;
+}
+.scroll-soft::-webkit-scrollbar-thumb:hover {
+  background: rgb(69 69 83 / 0.9);
+}
+.scroll-soft::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Allow text selection only on inputs and code */
+input, textarea, .selectable, code {
+  user-select: text;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(56 189 248 / 0.45);
+  border-radius: 6px;
+}
