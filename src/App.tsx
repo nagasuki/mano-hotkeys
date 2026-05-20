@@ -1,109 +1,121 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from './api'
-import type { Macro } from './types'
+import { useCallback, useEffect, useState } from 'react'
+import { useStore } from './state/store'
 import { Titlebar } from './components/Titlebar'
-import { Sidebar } from './components/Sidebar'
-import { MacroEditor } from './components/MacroEditor'
-import { EmptyState } from './components/EmptyState'
+import { Tabs } from './components/Tabs'
+import { CommandPalette } from './components/CommandPalette'
+import { MacrosPane } from './components/macros/MacrosPane'
+import { HotstringsPane } from './components/hotstrings/HotstringsPane'
+import { RemapsPane } from './components/remaps/RemapsPane'
+import { SettingsPane } from './components/settings/SettingsPane'
+import { Keyboard, Wand, Repeat, Settings as SettingsIcon } from './components/Icons'
 
-function newId(): string {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
-}
+type Tab = 'macros' | 'hotstrings' | 'remaps' | 'settings'
 
-function newMacro(): Macro {
-  const now = Date.now()
-  return {
-    id: newId(),
-    name: 'New macro',
-    accelerator: '',
-    enabled: true,
-    actions: [],
-    createdAt: now,
-    updatedAt: now
-  }
-}
+const TABS = [
+  { id: 'macros', label: 'Macros', icon: <Keyboard /> },
+  { id: 'hotstrings', label: 'Hotstrings', icon: <Wand /> },
+  { id: 'remaps', label: 'Remaps', icon: <Repeat /> },
+  { id: 'settings', label: 'Settings', icon: <SettingsIcon /> }
+] as const
 
 export default function App() {
-  const [macros, setMacros] = useState<Macro[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [failedIds, setFailedIds] = useState<string[]>([])
-  const [status, setStatus] = useState<string>('Loading…')
-  const loadedRef = useRef(false)
+  const store = useStore()
+  const [tab, setTab] = useState<Tab>('macros')
+  const [selectedMacro, setSelectedMacro] = useState<string | null>(null)
+  const [selectedHotstring, setSelectedHotstring] = useState<string | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
+  // Default-select first item in macros/hotstrings on first load.
   useEffect(() => {
-    void (async () => {
-      const initial = await api.listMacros()
-      setMacros(initial)
-      setSelectedId(initial[0]?.id ?? null)
-      loadedRef.current = true
-      setStatus(`${initial.length} macro${initial.length === 1 ? '' : 's'} loaded`)
-    })()
+    if (store.loaded && !selectedMacro && store.macros[0]) setSelectedMacro(store.macros[0].id)
+  }, [store.loaded, store.macros, selectedMacro])
+  useEffect(() => {
+    if (store.loaded && !selectedHotstring && store.hotstrings[0]) setSelectedHotstring(store.hotstrings[0].id)
+  }, [store.loaded, store.hotstrings, selectedHotstring])
+
+  // Ctrl+K opens the palette
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Debounced persistence — saves macros to disk and re-binds hotkeys.
-  useEffect(() => {
-    if (!loadedRef.current) return
-    setStatus('Saving…')
-    const t = setTimeout(async () => {
-      const result = await api.saveMacros(macros)
-      setFailedIds(result.failed)
-      if (result.ok) {
-        const bound = macros.filter((m) => m.enabled && m.accelerator).length
-        setStatus(`Saved · ${bound} hotkey${bound === 1 ? '' : 's'} active`)
-      } else {
-        setStatus(`Saved · ${result.failed.length} binding${result.failed.length === 1 ? '' : 's'} failed`)
-      }
-    }, 250)
-    return () => clearTimeout(t)
-  }, [macros])
-
-  const selected = useMemo(
-    () => macros.find((m) => m.id === selectedId) ?? null,
-    [macros, selectedId]
+  const handleNavigate = useCallback(
+    (target: Tab, id?: string) => {
+      setTab(target)
+      if (target === 'macros' && id) setSelectedMacro(id)
+      if (target === 'hotstrings' && id) setSelectedHotstring(id)
+    },
+    []
   )
 
-  const handleCreate = useCallback(() => {
-    const m = newMacro()
-    setMacros((cur) => [m, ...cur])
-    setSelectedId(m.id)
-  }, [])
+  const handleCreate = useCallback(
+    (target: 'macros' | 'hotstrings' | 'remaps') => {
+      setTab(target)
+      // The pane will see its empty selection and we'll let the user use its
+      // local "New" button — but for palette UX, jump them to the pane.
+    },
+    []
+  )
 
-  const handleUpdate = useCallback((next: Macro) => {
-    setMacros((cur) => cur.map((m) => (m.id === next.id ? next : m)))
-  }, [])
-
-  const handleDelete = useCallback(() => {
-    if (!selected) return
-    const idx = macros.findIndex((m) => m.id === selected.id)
-    const next = macros.filter((m) => m.id !== selected.id)
-    setMacros(next)
-    setSelectedId(next[idx]?.id ?? next[idx - 1]?.id ?? next[0]?.id ?? null)
-  }, [macros, selected])
+  if (!store.loaded || !store.settings) {
+    return (
+      <div className="flex h-full items-center justify-center bg-ink-950 text-sm text-ink-500">
+        Loading…
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-ink-950">
-      <Titlebar status={status} />
+      <Titlebar status={store.status} onToggleSuspend={store.toggleSuspended} />
+      <Tabs tabs={[...TABS]} active={tab} onChange={(id) => setTab(id as Tab)} />
       <div className="flex min-h-0 flex-1">
-        <Sidebar
-          macros={macros}
-          selectedId={selectedId}
-          failedIds={failedIds}
-          onSelect={setSelectedId}
-          onCreate={handleCreate}
-        />
-        <main className="min-w-0 flex-1">
-          {selected ? (
-            <MacroEditor
-              macro={selected}
-              failed={failedIds.includes(selected.id)}
-              onChange={handleUpdate}
-              onDelete={handleDelete}
-            />
-          ) : (
-            <EmptyState onCreate={handleCreate} />
-          )}
-        </main>
+        {tab === 'macros' && (
+          <MacrosPane
+            macros={store.macros}
+            setMacros={store.setMacros}
+            selectedId={selectedMacro}
+            setSelectedId={setSelectedMacro}
+            failedIds={store.failed.macros}
+          />
+        )}
+        {tab === 'hotstrings' && (
+          <HotstringsPane
+            hotstrings={store.hotstrings}
+            setHotstrings={store.setHotstrings}
+            selectedId={selectedHotstring}
+            setSelectedId={setSelectedHotstring}
+          />
+        )}
+        {tab === 'remaps' && (
+          <RemapsPane
+            remaps={store.remaps}
+            setRemaps={store.setRemaps}
+            failedIds={store.failed.remaps}
+          />
+        )}
+        {tab === 'settings' && (
+          <SettingsPane settings={store.settings} onSave={store.saveSettings} />
+        )}
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        macros={store.macros}
+        hotstrings={store.hotstrings}
+        remaps={store.remaps}
+        suspended={store.status?.suspended ?? false}
+        onNavigate={handleNavigate}
+        onCreate={handleCreate}
+        onToggleSuspended={store.toggleSuspended}
+      />
     </div>
   )
 }

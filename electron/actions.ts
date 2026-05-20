@@ -1,96 +1,118 @@
 import { clipboard, Notification, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import type { MacroAction } from './types.js'
+import { pressBackspace, sendKeys, typeText } from './output/keyboard.js'
+import { closeWindow, focusWindow, minimizeWindow, mouseClick, mouseMove, mouseScroll } from './output/win32.js'
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-/**
- * Send keystrokes through PowerShell's SendKeys. The string uses SendKeys
- * syntax: e.g. "^c" for Ctrl+C, "%{F4}" for Alt+F4, "Hello{ENTER}".
- */
-function sendKeysViaPowerShell(keys: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Escape single quotes for PowerShell single-quoted string.
-    const escaped = keys.replace(/'/g, "''")
-    const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')`
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
-      { windowsHide: true }
-    )
-    let stderr = ''
-    child.stderr.on('data', (b) => {
-      stderr += b.toString()
-    })
-    child.on('error', reject)
-    child.on('exit', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`SendKeys exited ${code}: ${stderr.trim()}`))
-    })
-  })
+function s(action: MacroAction, name: string, fallback = ''): string {
+  const v = action.params?.[name]
+  return typeof v === 'string' ? v : fallback
 }
-
-function typeLiteralText(text: string): Promise<void> {
-  // SendKeys treats + ^ % ~ ( ) { } as special — escape by wrapping in braces.
-  const escaped = text.replace(/[+^%~(){}\[\]]/g, (ch) => `{${ch}}`)
-  return sendKeysViaPowerShell(escaped)
+function n(action: MacroAction, name: string, fallback = 0): number {
+  const v = action.params?.[name]
+  return typeof v === 'number' ? v : Number(v) || fallback
+}
+function b(action: MacroAction, name: string, fallback = false): boolean {
+  const v = action.params?.[name]
+  return typeof v === 'boolean' ? v : fallback
 }
 
 async function runAction(action: MacroAction): Promise<void> {
   if (action.delayMs && action.delayMs > 0) await sleep(action.delayMs)
-  const value = action.value ?? ''
   switch (action.kind) {
     case 'launch': {
-      // Use shell.openPath for paths/files, falls back to spawn for command lines.
-      const trimmed = value.trim()
-      if (!trimmed) return
-      const result = await shell.openPath(trimmed)
-      if (result) {
-        // openPath returns error string when failed — try spawn detached.
-        spawn(trimmed, { detached: true, stdio: 'ignore', shell: true }).unref()
+      const target = s(action, 'target').trim()
+      if (!target) return
+      const err = await shell.openPath(target)
+      if (err) {
+        // openPath returns non-empty error string on failure; fall back to spawn.
+        spawn(target, { detached: true, stdio: 'ignore', shell: true }).unref()
       }
       return
     }
     case 'open-url': {
-      if (!value) return
-      const url = /^[a-z]+:\/\//i.test(value) ? value : `https://${value}`
-      await shell.openExternal(url)
+      const url = s(action, 'url').trim()
+      if (!url) return
+      const final = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`
+      await shell.openExternal(final)
       return
     }
     case 'run-command': {
-      if (!value) return
-      const child = spawn(value, { detached: true, stdio: 'ignore', shell: true })
-      child.unref()
+      const cmd = s(action, 'command').trim()
+      if (!cmd) return
+      spawn(cmd, { detached: true, stdio: 'ignore', shell: true }).unref()
       return
     }
     case 'type-text': {
-      if (!value) return
-      await typeLiteralText(value)
+      const text = s(action, 'text')
+      if (!text) return
+      const wpm = n(action, 'wpm', 0)
+      const delay = wpm > 0 ? Math.max(1, Math.round(100 / wpm)) : 0
+      await typeText(text, delay)
       return
     }
     case 'paste-text': {
-      if (!value) return
+      const text = s(action, 'text')
+      if (!text) return
       const previous = clipboard.readText()
-      clipboard.writeText(value)
-      // Brief delay so the target app sees the new clipboard contents.
+      clipboard.writeText(text)
       await sleep(40)
-      await sendKeysViaPowerShell('^v')
-      // Restore previous clipboard after paste settles.
-      setTimeout(() => clipboard.writeText(previous), 400)
+      await sendKeys('Ctrl+V')
+      setTimeout(() => clipboard.writeText(previous), 500)
       return
     }
     case 'send-keys': {
-      if (!value) return
-      await sendKeysViaPowerShell(value)
+      const keys = s(action, 'keys')
+      if (!keys) return
+      await sendKeys(keys)
       return
     }
     case 'notify': {
-      const n = new Notification({
-        title: 'Mano Hotkeys',
-        body: value || 'Macro triggered',
+      new Notification({
+        title: s(action, 'title', 'Mano Hotkeys'),
+        body: s(action, 'body', 'Macro fired'),
         silent: false
-      })
-      n.show()
+      }).show()
+      return
+    }
+    case 'sleep': {
+      const ms = n(action, 'ms', 250)
+      await sleep(ms)
+      return
+    }
+    case 'mouse-move': {
+      await mouseMove(n(action, 'x'), n(action, 'y'), b(action, 'relative'))
+      return
+    }
+    case 'mouse-click': {
+      const button = (s(action, 'button', 'left') as 'left' | 'right' | 'middle') || 'left'
+      await mouseClick(button, Math.max(1, n(action, 'count', 1)))
+      return
+    }
+    case 'mouse-scroll': {
+      await mouseScroll(n(action, 'amount', 3))
+      return
+    }
+    case 'window-focus': {
+      await focusWindow(s(action, 'titleContains'))
+      return
+    }
+    case 'window-close': {
+      await closeWindow(s(action, 'titleContains'))
+      return
+    }
+    case 'window-minimize': {
+      await minimizeWindow(s(action, 'titleContains'))
+      return
+    }
+    case 'clipboard-set': {
+      clipboard.writeText(s(action, 'text'))
+      return
+    }
+    case 'clipboard-clear': {
+      clipboard.clear()
       return
     }
   }
@@ -101,7 +123,16 @@ export async function runActions(actions: MacroAction[]): Promise<void> {
     try {
       await runAction(action)
     } catch (err) {
-      console.error('[actions] failed:', action, err)
+      console.error('[actions] failed:', action.kind, err)
     }
   }
+}
+
+/**
+ * Expand a hotstring: send backspaces to delete the trigger (and terminator
+ * if applicable), then type the replacement.
+ */
+export async function expandHotstring(deleteCount: number, insert: string): Promise<void> {
+  await pressBackspace(deleteCount)
+  await typeText(insert)
 }
