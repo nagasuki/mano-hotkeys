@@ -7,7 +7,9 @@ out/
 dist/
 release/
 native/mano-hook/build/
-native/mano-hook/prebuilds/
+# NOTE: native/mano-hook/prebuilds/ IS committed — it ships the prebuilt
+# Windows .node binary so the Linux CI build can package an MSI without
+# cross-compiling the addon.
 *.local
 
 # Editor

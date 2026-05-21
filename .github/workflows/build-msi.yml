@@ -1,4 +1,4 @@
-name: Build MSI
+name: Build Windows installers
 
 on:
   push:
@@ -16,11 +16,12 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     env:
-      # electron-builder picks this up to skip code signing in CI when we
-      # haven't wired secrets yet. Remove once a signing cert is in place.
+      # No code-signing cert wired up yet; skip discovery in CI.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Hide the noisy Wine debug stream.
+      WINEDEBUG: '-all'
 
     steps:
       - name: Checkout
@@ -32,20 +33,29 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Configure npm to use VS 2022 for node-gyp
-        run: npm config set msvs_version 2022
+      - name: Install Wine (needed by electron-builder to invoke WiX for MSI)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine32
 
       - name: Install root deps
         run: npm ci
 
-      - name: Install native addon deps
-        working-directory: native/mano-hook
-        run: npm ci
-
-      - name: Build native addon for Electron
-        # Compiles native/mano-hook against Electron's ABI (not Node's) so
-        # the .node binary loads inside the packaged app.
-        run: npx electron-builder install-app-deps
+      # We deliberately do NOT run `electron-builder install-app-deps` here.
+      # The native addon (native/mano-hook) can't cross-compile from Linux;
+      # it must be prebuilt on Windows once and committed to
+      # `native/mano-hook/prebuilds/win32-x64/`. node-gyp-build picks the
+      # prebuilt binary up at runtime on the target machine.
+      - name: Verify Windows prebuilt addon is present
+        run: |
+          if ! ls native/mano-hook/prebuilds/win32-x64/*.node >/dev/null 2>&1; then
+            echo "::error::No prebuilt addon under native/mano-hook/prebuilds/win32-x64/."
+            echo "Run on a Windows machine: npm --prefix native/mano-hook run prebuild"
+            echo "Then commit the resulting prebuilds/ folder."
+            exit 1
+          fi
+          ls -la native/mano-hook/prebuilds/win32-x64/
 
       - name: Typecheck
         run: npm run typecheck
@@ -53,17 +63,40 @@ jobs:
       - name: Build renderer + main + preload
         run: npm run build
 
-      - name: Package MSI
-        # --publish never: we'll upload artifacts manually below.
+      # MSI is best-effort: WiX under Wine is the flakier of the two paths.
+      # If it fails we still want a usable installer, so the NSIS step below
+      # is the required one. `id` + `continue-on-error` lets us record the
+      # outcome and surface it later.
+      - name: Package MSI (best-effort, runs WiX under Wine)
+        id: msi
+        continue-on-error: true
         run: npx electron-builder --win msi --x64 --publish never
 
-      - name: Upload MSI artifact
+      - name: Note MSI outcome
+        run: |
+          if [ "${{ steps.msi.outcome }}" = "success" ]; then
+            echo "::notice::MSI build succeeded."
+          else
+            echo "::warning::MSI build failed under Wine — falling back to NSIS only."
+          fi
+
+      # NSIS cross-builds cleanly from Linux (no Wine for WiX needed), so
+      # this is the guaranteed-good output.
+      - name: Package NSIS installer (required)
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: List release artifacts
+        run: ls -la release/
+
+      - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: mano-hotkeys-msi
+          name: mano-hotkeys-windows-installers
           path: |
             release/*.msi
             release/*.msi.blockmap
+            release/*.exe
+            release/*.exe.blockmap
             release/latest.yml
           if-no-files-found: error
 
@@ -74,6 +107,9 @@ jobs:
           files: |
             release/*.msi
             release/*.msi.blockmap
+            release/*.exe
+            release/*.exe.blockmap
             release/latest.yml
           draft: false
           generate_release_notes: true
+          fail_on_unmatched_files: false

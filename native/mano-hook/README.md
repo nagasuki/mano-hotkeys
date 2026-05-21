@@ -43,5 +43,22 @@ If `node-gyp` can't find Visual Studio:
 
 The build emits `build/Release/mano_hook.node`, which `node-gyp-build` loads at runtime.
 
-## Distribution (TODO)
-For shipping installers, run `npm run prebuild` to produce a prebuilt binary under `prebuilds/win32-x64/` so end users don't need a toolchain. Hook into `dist` in the root `package.json` once the build is reproducible in CI.
+## Distribution
+
+The Linux CI workflow (`.github/workflows/build-msi.yml`) packages the MSI under Wine and **cannot compile this addon** — Linux has no MSVC. The repo therefore ships a prebuilt Windows binary under `prebuilds/win32-x64/`, produced by [`prebuildify`](https://github.com/prebuild/prebuildify) and picked up at runtime by `node-gyp-build`.
+
+### Refreshing the prebuilt binary
+
+On a **Windows machine** with Visual Studio 2019/2022 Build Tools installed:
+
+```sh
+cd native/mano-hook
+npm ci
+npm run prebuild
+git add prebuilds/
+git commit -m "mano-hook: refresh win32-x64 prebuilt"
+```
+
+`prebuildify --napi` produces an ABI-stable Node-API binary that loads in both Node and Electron without rebuilding. Refresh it whenever you change `src/addon.cc`, bump `NAPI_VERSION` in `binding.gyp`, or want to support a new arch (`--arch arm64` etc.).
+
+If the CI step "Verify Windows prebuilt addon is present" fails, you forgot this step.
