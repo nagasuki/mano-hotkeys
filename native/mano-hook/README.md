@@ -33,13 +33,20 @@ npm run rebuild:native       # compiles the addon
 
 Requires:
 - Python 3.x
-- Visual Studio 2019 or 2022 with the "Desktop development with C++" workload (VS 2025/18 preview not yet recognized by node-gyp — install VS 2022 Build Tools alongside, or run in a "Developer Command Prompt for VS 2022")
+- **Visual Studio Build Tools 2022** with the "Desktop development with C++" workload.
+  - Download: <https://aka.ms/vs/17/release/vs_BuildTools.exe>
+  - `node-gyp` v11 only recognizes VS versions 15 (2017), 16 (2019), and 17 (2022). VS 2026 (version 18) is **not** supported yet, even with the right `GYP_MSVS_*` env vars or running from its Developer Command Prompt — node-gyp fails the `findVS` check with "unknown version 'undefined'". Install VS 2022 Build Tools side-by-side; the two coexist fine.
 - Node ≥ 18
 
-If `node-gyp` can't find Visual Studio:
-- Set `npm config set msvs_version 2022`
-- Or open `x64 Native Tools Command Prompt for VS 2022` and run the build from there
-- Or set `GYP_MSVS_VERSION=2022` in the environment
+After installing VS 2022 Build Tools:
+
+```sh
+npm config set msvs_version 2022
+cd <repo root>
+npm run rebuild:native
+```
+
+If you keep multiple VS installs and want to be explicit, run the build from the **"x64 Native Tools Command Prompt for VS 2022"** shortcut.
 
 The build emits `build/Release/mano_hook.node`, which `node-gyp-build` loads at runtime.
 

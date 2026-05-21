@@ -15,7 +15,6 @@
 //   - Mouse "pseudo-VKs" (>= 0x200) let the JS side reuse the same key
 //     namespace for mouse buttons and wheel ticks.
 
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <napi.h>
 #include <atomic>
@@ -24,6 +23,22 @@
 #include <vector>
 #include <string>
 #include <optional>
+
+// windows.h defines MOD_CTRL / MOD_ALT / MOD_SHIFT / MOD_WIN as
+// RegisterHotKey modifier flags. We use the same names with different
+// values, so undef before redefining.
+#ifdef MOD_CTRL
+#  undef MOD_CTRL
+#endif
+#ifdef MOD_ALT
+#  undef MOD_ALT
+#endif
+#ifdef MOD_SHIFT
+#  undef MOD_SHIFT
+#endif
+#ifdef MOD_WIN
+#  undef MOD_WIN
+#endif
 
 namespace {
 
