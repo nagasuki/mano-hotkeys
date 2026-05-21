@@ -1,40 +1,73 @@
-import { uIOhook, UiohookKey } from 'uiohook-napi'
-import { KEY_TO_CODE } from '../engine/keymap.js'
+import manoHook from 'mano-hook'
+import { KEY_TO_VK, isMousePseudoVk } from '../engine/vk.js'
 import { parseAccelerator } from '../engine/matcher.js'
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-const MODIFIER_CODES = {
-  Ctrl: UiohookKey.Ctrl,
-  Alt: UiohookKey.Alt,
-  Shift: UiohookKey.Shift,
-  Win: UiohookKey.Meta
+// Windows VK codes for modifiers
+const VK = {
+  Ctrl: 0x11,
+  Alt: 0x12,
+  Shift: 0x10,
+  Win: 0x5b,
+  Backspace: 0x08,
+  Enter: 0x0d,
+  Tab: 0x09
 } as const
 
-/** Send a single key combo, e.g. "Ctrl+Shift+T" or "Win+D". */
-export async function sendKeys(accelerator: string): Promise<void> {
-  const parsed = parseAccelerator(accelerator)
-  if (!parsed) throw new Error(`Invalid accelerator: ${accelerator}`)
-  const keyCode = KEY_TO_CODE[parsed.key]
-  if (keyCode === undefined) throw new Error(`Unknown key: ${parsed.key}`)
-
-  const modCodes = parsed.modifiers.map((m) => MODIFIER_CODES[m])
-  for (const c of modCodes) uIOhook.keyToggle(c, 'down')
-  // Small delay so modifier-down registers before the key.
-  await sleep(5)
-  uIOhook.keyTap(keyCode)
-  await sleep(5)
-  for (const c of [...modCodes].reverse()) uIOhook.keyToggle(c, 'up')
+const MOD_VK: Record<'Ctrl' | 'Alt' | 'Shift' | 'Win', number> = {
+  Ctrl: VK.Ctrl,
+  Alt: VK.Alt,
+  Shift: VK.Shift,
+  Win: VK.Win
 }
 
 /**
- * Type a literal text string. For each printable character, find the
- * keycode and shift state and tap it. Falls back to "Backspace" / "Enter"
- * for control characters.
+ * Send a single key combo, e.g. "Ctrl+Shift+T", "Win+D", or "MouseX1".
+ * Accepts mouse pseudo-keys as targets so remaps like F13 → MouseMiddle work.
+ */
+export async function sendKeys(accelerator: string): Promise<void> {
+  const parsed = parseAccelerator(accelerator)
+  if (!parsed) throw new Error(`Invalid accelerator: ${accelerator}`)
+  const vk = KEY_TO_VK[parsed.key]
+  if (vk === undefined) throw new Error(`Unknown key: ${parsed.key}`)
+
+  // Hold any keyboard modifiers around the click/tap so combos like
+  // "Ctrl+MouseLeft" work as expected.
+  const modSteps: { vk: number; down: boolean }[] = parsed.modifiers.map((m) => ({ vk: MOD_VK[m], down: true }))
+  if (modSteps.length) manoHook.sendInput(modSteps)
+
+  if (isMousePseudoVk(vk)) {
+    // Wheel events are one-shot; buttons get down+up.
+    if (vk >= 0x210) {
+      manoHook.sendMouseInput([{ kind: 'wheel', vk }])
+    } else {
+      manoHook.sendMouseInput([
+        { kind: 'button', vk, down: true },
+        { kind: 'button', vk, down: false }
+      ])
+    }
+  } else {
+    manoHook.sendInput([
+      { vk, down: true },
+      { vk, down: false }
+    ])
+  }
+
+  if (modSteps.length) {
+    manoHook.sendInput(modSteps.map((s) => ({ vk: s.vk, down: false })).reverse())
+  }
+  await sleep(5)
+}
+
+/**
+ * Type a literal text string. Each printable character is sent as a
+ * VK + optional Shift via SendInput. Unicode fallback for characters
+ * outside the US-ASCII keymap is deferred.
  */
 export async function typeText(text: string, charDelayMs = 0): Promise<void> {
   for (const ch of text) {
-    await typeChar(ch)
+    typeChar(ch)
     if (charDelayMs > 0) await sleep(charDelayMs)
   }
 }
@@ -62,56 +95,42 @@ const UNSHIFTED: Record<string, string> = {
   '`': 'Backquote'
 }
 
-async function typeChar(ch: string): Promise<void> {
-  if (ch === '\n') {
-    uIOhook.keyTap(UiohookKey.Enter)
-    return
-  }
-  if (ch === '\t') {
-    uIOhook.keyTap(UiohookKey.Tab)
-    return
-  }
-  if (ch === '\b') {
-    uIOhook.keyTap(UiohookKey.Backspace)
-    return
-  }
+function pressVk(vk: number, withShift: boolean): void {
+  const steps: { vk: number; down: boolean }[] = []
+  if (withShift) steps.push({ vk: VK.Shift, down: true })
+  steps.push({ vk, down: true })
+  steps.push({ vk, down: false })
+  if (withShift) steps.push({ vk: VK.Shift, down: false })
+  manoHook.sendInput(steps)
+}
 
-  // Letters
+function typeChar(ch: string): void {
+  if (ch === '\n') return manoHook.tap(VK.Enter)
+  if (ch === '\t') return manoHook.tap(VK.Tab)
+  if (ch === '\b') return manoHook.tap(VK.Backspace)
+
   if (/^[a-z]$/.test(ch)) {
-    uIOhook.keyTap(KEY_TO_CODE[ch.toUpperCase()])
-    return
+    return pressVk(KEY_TO_VK[ch.toUpperCase()], false)
   }
   if (/^[A-Z]$/.test(ch)) {
-    uIOhook.keyToggle(UiohookKey.Shift, 'down')
-    uIOhook.keyTap(KEY_TO_CODE[ch])
-    uIOhook.keyToggle(UiohookKey.Shift, 'up')
-    return
+    return pressVk(KEY_TO_VK[ch], true)
   }
-  // Digits
   if (/^[0-9]$/.test(ch)) {
-    uIOhook.keyTap(KEY_TO_CODE[ch])
-    return
+    return pressVk(KEY_TO_VK[ch], false)
   }
-  // Shifted symbols
   if (ch in SHIFTED) {
-    const keyName = SHIFTED[ch]
-    const code = /^[0-9]$/.test(keyName) ? KEY_TO_CODE[keyName] : KEY_TO_CODE[keyName]
-    uIOhook.keyToggle(UiohookKey.Shift, 'down')
-    uIOhook.keyTap(code)
-    uIOhook.keyToggle(UiohookKey.Shift, 'up')
-    return
+    return pressVk(KEY_TO_VK[SHIFTED[ch]], true)
   }
   if (ch in UNSHIFTED) {
-    uIOhook.keyTap(KEY_TO_CODE[UNSHIFTED[ch]])
-    return
+    return pressVk(KEY_TO_VK[UNSHIFTED[ch]], false)
   }
-  // Unknown character — give up silently (could be unicode).
+  // Unknown character — Unicode-aware fallback (KEYEVENTF_UNICODE) is TODO.
 }
 
 /** Press backspace N times. */
 export async function pressBackspace(times: number): Promise<void> {
   for (let i = 0; i < times; i++) {
-    uIOhook.keyTap(UiohookKey.Backspace)
-    await sleep(2)
+    manoHook.tap(VK.Backspace)
+    if (i < times - 1) await sleep(2)
   }
 }

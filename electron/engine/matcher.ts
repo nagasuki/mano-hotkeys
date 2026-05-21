@@ -1,4 +1,4 @@
-import { CODE_TO_KEY, KEY_TO_CODE, MODIFIERS, sortModifiers, type Modifier } from './keymap.js'
+import { KEY_TO_VK, MODIFIERS, VK_TO_KEY, sortModifiers, type Modifier } from './vk.js'
 
 export interface ParsedAccelerator {
   modifiers: Modifier[]
@@ -36,13 +36,22 @@ export function parseAccelerator(raw: string): ParsedAccelerator | null {
 
 function normalizeToken(tok: string): string | null {
   const lower = tok.toLowerCase()
-  // Modifier aliases
   if (lower === 'ctrl' || lower === 'control' || lower === 'cmdorctrl' || lower === 'commandorcontrol') return 'Ctrl'
   if (lower === 'alt' || lower === 'option') return 'Alt'
   if (lower === 'shift') return 'Shift'
   if (lower === 'win' || lower === 'super' || lower === 'meta' || lower === 'cmd' || lower === 'command') return 'Win'
 
-  // Key aliases
+  // Mouse aliases (AHK-style + verbose forms)
+  if (lower === 'lbutton' || lower === 'mouseleft' || lower === 'mouse1') return 'MouseLeft'
+  if (lower === 'rbutton' || lower === 'mouseright' || lower === 'mouse2') return 'MouseRight'
+  if (lower === 'mbutton' || lower === 'mousemiddle' || lower === 'mouse3') return 'MouseMiddle'
+  if (lower === 'xbutton1' || lower === 'mousex1' || lower === 'mouse4') return 'MouseX1'
+  if (lower === 'xbutton2' || lower === 'mousex2' || lower === 'mouse5') return 'MouseX2'
+  if (lower === 'wheelup') return 'WheelUp'
+  if (lower === 'wheeldown') return 'WheelDown'
+  if (lower === 'wheelleft') return 'WheelLeft'
+  if (lower === 'wheelright') return 'WheelRight'
+
   if (lower === 'esc' || lower === 'escape') return 'Esc'
   if (lower === 'return') return 'Enter'
   if (lower === 'pgup') return 'PageUp'
@@ -50,20 +59,16 @@ function normalizeToken(tok: string): string | null {
   if (lower === 'del') return 'Delete'
   if (lower === 'ins') return 'Insert'
 
-  // Single character letters/digits — upper-case letters, digits as-is
   if (/^[a-z]$/.test(lower)) return lower.toUpperCase()
   if (/^[0-9]$/.test(lower)) return lower
-
-  // Function keys
   if (/^f([1-9]|1[0-9]|2[0-4])$/.test(lower)) return 'F' + lower.slice(1)
 
-  // Punctuation by canonical name
-  if (lower in KEY_TO_CODE_LC) return KEY_TO_CODE_LC[lower]
+  if (lower in KEY_TO_VK_LC) return KEY_TO_VK_LC[lower]
   return null
 }
 
-const KEY_TO_CODE_LC: Record<string, string> = Object.fromEntries(
-  Object.keys(KEY_TO_CODE).map((k) => [k.toLowerCase(), k])
+const KEY_TO_VK_LC: Record<string, string> = Object.fromEntries(
+  Object.keys(KEY_TO_VK).map((k) => [k.toLowerCase(), k])
 )
 
 export function formatAccelerator(p: ParsedAccelerator): string {
@@ -71,34 +76,27 @@ export function formatAccelerator(p: ParsedAccelerator): string {
 }
 
 /**
- * Match a current event (keycode + modifier flags) against a parsed accel.
+ * Match an event (VK + modifier mask) against a parsed accelerator.
  * Modifier match is exact: extra modifiers held = no match.
  */
 export interface KeyEventLike {
-  keycode: number
-  ctrlKey: boolean
-  altKey: boolean
-  shiftKey: boolean
-  metaKey: boolean
+  vk: number
+  mods: number // bitmask, see vk.ts
 }
 
 export function eventMatches(event: KeyEventLike, parsed: ParsedAccelerator): boolean {
-  const name = CODE_TO_KEY[event.keycode]
+  const name = VK_TO_KEY[event.vk]
   if (!name) return false
   if (name !== parsed.key) return false
-  const wantCtrl = parsed.modifiers.includes('Ctrl')
-  const wantAlt = parsed.modifiers.includes('Alt')
-  const wantShift = parsed.modifiers.includes('Shift')
-  const wantWin = parsed.modifiers.includes('Win')
-  return (
-    event.ctrlKey === wantCtrl &&
-    event.altKey === wantAlt &&
-    event.shiftKey === wantShift &&
-    event.metaKey === wantWin
-  )
+  // Modifier mask must match exactly
+  const want =
+    (parsed.modifiers.includes('Ctrl')  ? 1 : 0) |
+    (parsed.modifiers.includes('Alt')   ? 2 : 0) |
+    (parsed.modifiers.includes('Shift') ? 4 : 0) |
+    (parsed.modifiers.includes('Win')   ? 8 : 0)
+  return event.mods === want
 }
 
-/** Validate accelerator string — used by the UI to flag bad bindings. */
 export function isValidAccelerator(raw: string): boolean {
   return parseAccelerator(raw) !== null
 }

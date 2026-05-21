@@ -99,6 +99,11 @@ export interface EngineStatus {
   uptimeMs: number
 }
 
+export interface RecorderStatus {
+  recording: boolean
+  eventCount: number
+}
+
 export interface ApiBridge {
   listMacros(): Promise<Macro[]>
   saveMacros(m: Macro[]): Promise<BindResult>
@@ -121,6 +126,12 @@ export interface ApiBridge {
   minimizeToTray(): Promise<void>
 
   onEngineUpdate(cb: (status: EngineStatus) => void): () => void
+
+  recorderStart(): Promise<RecorderStatus>
+  recorderStop(): Promise<MacroAction[]>
+  recorderCancel(): Promise<void>
+  recorderStatus(): Promise<RecorderStatus>
+  onRecorderUpdate(cb: (status: RecorderStatus) => void): () => void
 }
 
 declare global {

@@ -1,0 +1,79 @@
+name: Build MSI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create a GitHub Release with the artifact'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # electron-builder picks this up to skip code signing in CI when we
+      # haven't wired secrets yet. Remove once a signing cert is in place.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Configure npm to use VS 2022 for node-gyp
+        run: npm config set msvs_version 2022
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install native addon deps
+        working-directory: native/mano-hook
+        run: npm ci
+
+      - name: Build native addon for Electron
+        # Compiles native/mano-hook against Electron's ABI (not Node's) so
+        # the .node binary loads inside the packaged app.
+        run: npx electron-builder install-app-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build renderer + main + preload
+        run: npm run build
+
+      - name: Package MSI
+        # --publish never: we'll upload artifacts manually below.
+        run: npx electron-builder --win msi --x64 --publish never
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mano-hotkeys-msi
+          path: |
+            release/*.msi
+            release/*.msi.blockmap
+            release/latest.yml
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.msi
+            release/*.msi.blockmap
+            release/latest.yml
+          draft: false
+          generate_release_notes: true

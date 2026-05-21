@@ -147,6 +147,11 @@ export interface EngineStatus {
   uptimeMs: number
 }
 
+export interface RecorderStatus {
+  recording: boolean
+  eventCount: number
+}
+
 // ── UI catalog (kept here so renderer + main share one source of truth) ─────
 
 export const ACTION_LABELS: Record<ActionKind, string> = {

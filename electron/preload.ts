@@ -6,6 +6,7 @@ import type {
   Hotstring,
   Macro,
   MacroAction,
+  RecorderStatus,
   Remap,
   WindowContext
 } from './types.js'
@@ -42,6 +43,17 @@ const api = {
     const listener = (_: unknown, status: EngineStatus) => cb(status)
     ipcRenderer.on('engine:update', listener)
     return () => ipcRenderer.removeListener('engine:update', listener)
+  },
+
+  // Recorder
+  recorderStart: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:start'),
+  recorderStop: (): Promise<MacroAction[]> => ipcRenderer.invoke('recorder:stop'),
+  recorderCancel: (): Promise<void> => ipcRenderer.invoke('recorder:cancel'),
+  recorderStatus: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:status'),
+  onRecorderUpdate: (cb: (status: RecorderStatus) => void) => {
+    const listener = (_: unknown, status: RecorderStatus) => cb(status)
+    ipcRenderer.on('recorder:update', listener)
+    return () => ipcRenderer.removeListener('recorder:update', listener)
   }
 }
 

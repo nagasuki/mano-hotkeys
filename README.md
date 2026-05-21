@@ -8,7 +8,7 @@ A keyboard macro and automation app for Windows — native input engine, clean U
 
 - **Electron 33** + **electron-vite** — desktop shell with HMR in dev
 - **React 18** + **TypeScript** + **Tailwind CSS** — minimal dark UI
-- **uiohook-napi** — low-level global keyboard + mouse hook (native, prebuilt for win32-x64)
+- **mano-hook** — in-tree C++ N-API addon, owns a `WH_KEYBOARD_LL` hook on a dedicated thread with native-side suppression and `SendInput`-based output (tagged with a magic `dwExtraInfo` so the hook ignores our own synthetic input)
 - **PowerShell + Win32 PInvoke** — mouse output, window management, active-window detection
 
 ## Feature surface
@@ -26,7 +26,12 @@ A keyboard macro and automation app for Windows — native input engine, clean U
 
 ### Key remaps
 - Single-key remaps (e.g. CapsLock → Esc, F13 → Win+L)
-- Honest caveat: uiohook-napi can't suppress the original key, so source keys should be ones you can dedicate (F-keys, CapsLock, NumLock, etc.).
+- Source keys are suppressed natively by the low-level hook, so the original key no longer leaks to the focused app.
+
+### Mouse hotkeys & remaps
+- `MouseLeft` / `MouseRight` / `MouseMiddle` / `MouseX1` / `MouseX2` and `WheelUp` / `WheelDown` / `WheelLeft` / `WheelRight` can be used anywhere a key name is accepted (AHK aliases `LButton` / `RButton` / `MButton` / `XButton1` / `XButton2` also parse).
+- Mouse-button events are suppressed by the native LL mouse hook when a rule matches, so e.g. binding `XButton1 → Ctrl+C` won't also navigate "back" in your browser.
+- Wheel ticks fire as one-shot hotkeys (`WheelUp`, `WheelDown`).
 
 ### App-context filters
 - Limit any macro or hotstring to specific windows
@@ -39,6 +44,10 @@ A keyboard macro and automation app for Windows — native input engine, clean U
 - **Windows** — focus, close, minimize (by title-contains or active)
 - **Clipboard** — set, clear
 - **Flow** — sleep, notify
+
+### Macro recorder
+- "Record" button in the macro editor captures key + mouse + wheel events with timing while macros are temporarily disabled. Stop with the button or **Esc**, and the recording is appended as editable actions (typing runs become `type-text`, modifier-bearing keys become `send-keys`, clicks become `mouse-move` + `mouse-click`, wheel ticks become `mouse-scroll`).
+- Mouse-move samples are intentionally not recorded — they bloat macros and break across resolutions. Clicks carry the absolute coords needed for replay.
 
 ### UX
 - Tabbed surface (Macros / Hotstrings / Remaps / Settings)
@@ -97,11 +106,10 @@ src/
 
 ## Known limits & roadmap
 
-- **No input suppression.** uiohook-napi is a passive listener; remaps and macro hotkeys do not block the original keystroke from reaching the focused app. Pick accelerators that aren't claimed by the foreground app.
 - **No image / pixel actions yet.** Screen capture and pixel search are AHK strengths we haven't matched.
 - **No expression language.** Actions are a flat sequence — no if/while/variables yet (planned: a small expression grammar over clipboard, active-window fields, and mouse position).
-- **No macro recorder yet.** Planned: a record-and-edit flow that captures key + mouse events with timing.
-- **Single-key remap only.** Modifier-bearing source remaps need true interception.
+- **Single-key remap only in the UI.** The hook supports modifier-bearing source remaps now; the editor surface still needs to expose them.
+- **Mouse triggers via JSON only for now.** The hook + matcher recognize `MouseX1`, `WheelUp`, etc., but the visual `HotkeyCapture` widget still only captures keyboard events. Save mouse-bound macros directly in `%APPDATA%/mano-hotkeys/mano-hotkeys.json` until the capture widget is extended.
 
 ## Hotkey examples
 

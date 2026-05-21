@@ -1,10 +1,20 @@
-import { uIOhook, UiohookKey, type UiohookKeyboardEvent } from 'uiohook-napi'
-import type { Hotstring, Macro, Remap, WindowContext } from '../types.js'
-import { CODE_TO_KEY, isModifierCode, printableChar } from './keymap.js'
-import { eventMatches, parseAccelerator, type ParsedAccelerator } from './matcher.js'
+import manoHook from 'mano-hook'
+import type { Hotstring, Macro, Remap } from '../types.js'
+import {
+  KEY_TO_VK,
+  VK_TO_KEY,
+  MOD_CTRL,
+  MOD_ALT,
+  MOD_SHIFT,
+  MOD_WIN,
+  isModifierVk,
+  modMaskFromList,
+  printableChar
+} from './vk.js'
+import { parseAccelerator, type ParsedAccelerator } from './matcher.js'
 import { HotstringMatcher, type HotstringMatch } from './hotstrings.js'
 import { contextAllows } from './context.js'
-import { getActiveWindow, getLastActiveWindow, refreshActiveWindow } from './active-window.js'
+import { getLastActiveWindow, refreshActiveWindow } from './active-window.js'
 
 export interface InputEngineHandlers {
   onMacroTrigger(macro: Macro): void
@@ -17,20 +27,36 @@ export interface InputEngineHandlers {
 interface CompiledMacro {
   macro: Macro
   accel: ParsedAccelerator
+  vk: number
+  mods: number
+  ruleId: string
 }
 
 interface CompiledRemap {
   remap: Remap
-  accel: ParsedAccelerator
+  vk: number
+  ruleId: string
+}
+
+interface NativeKeyEvent {
+  kind: 'key' | 'mouseButton' | 'wheel'
+  vk: number
+  mods: number
+  up: boolean
+  suppressed: boolean
+  x?: number
+  y?: number
+  wheelDelta?: number
+  ruleId?: string
 }
 
 /**
- * Central input engine — owns the uiohook subscription and routes every
- * keystroke through hotkey, remap, and hotstring matchers.
+ * Central input engine — owns the native low-level hook subscription and
+ * routes every keystroke through hotkey, remap, and hotstring matchers.
  *
- * Important caveat: uiohook-napi is a passive listener and cannot suppress
- * the original keystroke. Remaps therefore fire IN ADDITION to the source
- * key reaching the focused app; we emit a warning when registering them.
+ * Hotkey and remap matches are suppressed at the OS level (decided
+ * synchronously by the native ruleset). Hotstrings run unsuppressed and
+ * clean up via BackSpace, same as AHK.
  */
 export class InputEngine {
   private started = false
@@ -39,27 +65,44 @@ export class InputEngine {
 
   private macros: CompiledMacro[] = []
   private remaps: CompiledRemap[] = []
+  private macroById = new Map<string, CompiledMacro>()
+  private remapById = new Map<string, CompiledRemap>()
   private hotstrings: Hotstring[] = []
   private hotstringBuf = new HotstringMatcher()
   private suspendAccel: ParsedAccelerator | null = null
+  private readonly suspendRuleId = '__suspend__'
+
+  private rawHandler: ((e: NativeKeyEvent) => boolean) | null = null
 
   private startedAt = 0
 
   constructor(private handlers: InputEngineHandlers) {}
 
+  /**
+   * Install a raw-event handler (used by the recorder). When set, native
+   * rules are bypassed (we push an empty ruleset, keeping only the suspend
+   * binding) and every key/mouse event is forwarded to `cb`. The handler
+   * returns true if it consumed the event; that's currently informational
+   * only since the native side has already decided suppression.
+   */
+  setRawHandler(cb: ((e: NativeKeyEvent) => boolean) | null): void {
+    this.rawHandler = cb
+    this.syncRuleset()
+  }
+
   start(): void {
     if (this.started) return
     this.started = true
     this.startedAt = Date.now()
-    uIOhook.on('keydown', (e) => this.onKeyDown(e))
-    uIOhook.start()
+    manoHook.start((e: NativeKeyEvent) => this.onEvent(e))
+    this.syncRuleset()
   }
 
   stop(): void {
     if (!this.started) return
     this.started = false
     try {
-      uIOhook.stop()
+      manoHook.stop()
     } catch {
       /* ignore */
     }
@@ -76,6 +119,7 @@ export class InputEngine {
   setSuspended(v: boolean): void {
     this.suspended = v
     this.hotstringBuf.reset()
+    this.syncRuleset()
   }
 
   isSuspended(): boolean {
@@ -84,6 +128,7 @@ export class InputEngine {
 
   setSuspendAccelerator(accel: string): void {
     this.suspendAccel = parseAccelerator(accel)
+    this.syncRuleset()
   }
 
   setMacros(macros: Macro[]): string[] {
@@ -97,9 +142,22 @@ export class InputEngine {
         continue
       }
       if (!accel) continue
-      compiled.push({ macro: m, accel })
+      const vk = KEY_TO_VK[accel.key]
+      if (vk === undefined) {
+        failed.push(m.id)
+        continue
+      }
+      compiled.push({
+        macro: m,
+        accel,
+        vk,
+        mods: modMaskFromList(accel.modifiers),
+        ruleId: `macro:${m.id}`
+      })
     }
     this.macros = compiled
+    this.macroById = new Map(compiled.map((c) => [c.ruleId, c]))
+    this.syncRuleset()
     return failed
   }
 
@@ -109,18 +167,22 @@ export class InputEngine {
     for (const r of remaps) {
       if (!r.enabled) continue
       const accel = parseAccelerator(r.from)
-      if (!accel) {
+      // Modifier-bearing source remaps now work (the LL hook can suppress
+      // them), but the UI still constrains to single-key for now.
+      if (!accel || accel.modifiers.length > 0) {
         failed.push(r.id)
         continue
       }
-      // Remaps only handle single-key sources without modifiers (for now).
-      if (accel.modifiers.length > 0) {
+      const vk = KEY_TO_VK[accel.key]
+      if (vk === undefined) {
         failed.push(r.id)
         continue
       }
-      compiled.push({ remap: r, accel })
+      compiled.push({ remap: r, vk, ruleId: `remap:${r.id}` })
     }
     this.remaps = compiled
+    this.remapById = new Map(compiled.map((c) => [c.ruleId, c]))
+    this.syncRuleset()
     return failed
   }
 
@@ -129,68 +191,103 @@ export class InputEngine {
     this.hotstringBuf.setHotstrings(this.hotstrings)
   }
 
-  private onKeyDown(e: UiohookKeyboardEvent): void {
-    // Track CapsLock toggle (best-effort, may drift if user changes it
-    // outside our hook before we start).
-    if (e.keycode === UiohookKey.CapsLock) this.capsLock = !this.capsLock
+  /** Push the current macro+remap+suspend ruleset down to the native hook. */
+  private syncRuleset(): void {
+    if (!this.started) return
+    const entries: { id: string; vk: number; mods: number; kind: 'hotkey' | 'remap' }[] = []
+    // While recording, suppress nothing except the suspend toggle — the
+    // user wants raw input captured, not their macros firing.
+    if (!this.rawHandler) {
+      for (const m of this.macros) {
+        entries.push({ id: m.ruleId, vk: m.vk, mods: m.mods, kind: 'hotkey' })
+      }
+      for (const r of this.remaps) {
+        entries.push({ id: r.ruleId, vk: r.vk, mods: 0, kind: 'remap' })
+      }
+    }
+    if (this.suspendAccel) {
+      const vk = KEY_TO_VK[this.suspendAccel.key]
+      if (vk !== undefined) {
+        entries.push({
+          id: this.suspendRuleId,
+          vk,
+          mods: modMaskFromList(this.suspendAccel.modifiers),
+          kind: 'hotkey'
+        })
+      }
+    }
+    manoHook.setRuleset({ entries, suspended: this.suspended })
+  }
 
-    // Pull the latest known active window, kick a refresh in the background.
-    refreshActiveWindow()
+  private onEvent(e: NativeKeyEvent): void {
+    const isMouse = e.kind !== 'key'
 
-    // Suspend toggle works even when suspended.
-    if (this.suspendAccel && eventMatches(e, this.suspendAccel)) {
+    // Track CapsLock toggle (best-effort) — keyboard events only.
+    if (!isMouse && !e.up && e.vk === 0x14) this.capsLock = !this.capsLock
+
+    // Mouse-button "up" events don't fire rules, but mouse-button "down"
+    // and wheel events do. Keyboard "up" events never fire rules.
+    if (e.up && e.kind !== 'mouseButton') return
+    if (e.up) return
+
+    if (e.ruleId === this.suspendRuleId) {
       this.handlers.onSuspendToggle()
+      return
+    }
+
+    // Recording mode short-circuits everything else: rules are already
+    // disabled at the native level, hotstrings are silenced, and we just
+    // hand raw events to the recorder.
+    if (this.rawHandler) {
+      this.rawHandler(e)
       return
     }
 
     if (this.suspended) return
 
-    // Modifier-only key events do nothing.
-    if (isModifierCode(e.keycode)) return
-
+    refreshActiveWindow()
     const win = getLastActiveWindow()
 
-    // 1. Try macros (modifier+key combos).
-    for (const cm of this.macros) {
-      if (!eventMatches(e, cm.accel)) continue
-      if (!contextAllows(cm.macro.appContext, win)) continue
-      this.handlers.onMacroTrigger(cm.macro)
-      // Macros consume the event for hotstring purposes — clear buffer.
-      this.hotstringBuf.reset()
-      return
-    }
-
-    // 2. Try remaps (single-key, no modifiers).
-    if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-      for (const cr of this.remaps) {
-        if (!eventMatches(e, cr.accel)) continue
-        this.handlers.onRemapFire(cr.remap)
+    if (e.ruleId) {
+      const macro = this.macroById.get(e.ruleId)
+      if (macro) {
+        if (contextAllows(macro.macro.appContext, win)) {
+          this.handlers.onMacroTrigger(macro.macro)
+        }
+        this.hotstringBuf.reset()
+        return
+      }
+      const remap = this.remapById.get(e.ruleId)
+      if (remap) {
+        this.handlers.onRemapFire(remap.remap)
         return
       }
     }
 
-    // 3. Build hotstring buffer using printable chars (no modifiers besides Shift).
-    if (e.ctrlKey || e.altKey || e.metaKey) {
-      // Control sequences shouldn't pollute the buffer.
+    // Mouse events never feed the hotstring buffer.
+    if (isMouse) return
+
+    if (isModifierVk(e.vk)) return
+
+    // Hotstring buffer — printable chars only, no Ctrl/Alt/Win.
+    if (e.mods & (MOD_CTRL | MOD_ALT | MOD_WIN)) {
       this.hotstringBuf.reset()
       return
     }
-    if (e.keycode === UiohookKey.Backspace) {
+    if (e.vk === 0x08) {
       const match = this.hotstringBuf.onChar('\b', this.hotstrings)
       if (match) this.handlers.onHotstringFire(match)
       return
     }
-    const ch = printableChar(e.keycode, e.shiftKey, this.capsLock)
+    const shift = (e.mods & MOD_SHIFT) !== 0
+    const ch = printableChar(e.vk, shift, this.capsLock)
     if (ch === null) {
-      // Non-printable navigation keys reset the buffer (Enter, Tab handled
-      // as terminators below).
-      const name = CODE_TO_KEY[e.keycode]
+      const name = VK_TO_KEY[e.vk]
       if (name === 'Enter' || name === 'NumpadEnter' || name === 'Tab') {
         const sep = name === 'Tab' ? '\t' : '\n'
         const match = this.hotstringBuf.onChar(sep, this.hotstrings)
         if (match) {
           this.handlers.onHotstringFire(match)
-          // Caller will deal with deletion; clear our buffer.
           this.hotstringBuf.reset()
         }
         return

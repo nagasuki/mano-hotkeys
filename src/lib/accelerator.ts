@@ -83,6 +83,56 @@ function mapKey(e: KeyboardEvent): string | null {
   return CODE_MAP[code] ?? null
 }
 
+/**
+ * Build an accelerator string from a MouseEvent. Returns null for buttons we
+ * don't recognize.
+ */
+export function mouseEventToAccelerator(e: MouseEvent): string | null {
+  const name = mouseButtonName(e.button)
+  if (!name) return null
+  return withMods(e, name)
+}
+
+/**
+ * Build an accelerator string from a WheelEvent. Chooses the dominant axis
+ * (vertical wins on a tie) and direction.
+ */
+export function wheelEventToAccelerator(e: WheelEvent): string | null {
+  const ax = Math.abs(e.deltaX)
+  const ay = Math.abs(e.deltaY)
+  if (ax === 0 && ay === 0) return null
+  const name =
+    ay >= ax
+      ? e.deltaY > 0
+        ? 'WheelDown'
+        : 'WheelUp'
+      : e.deltaX > 0
+        ? 'WheelRight'
+        : 'WheelLeft'
+  return withMods(e, name)
+}
+
+function mouseButtonName(button: number): string | null {
+  switch (button) {
+    case 0: return 'MouseLeft'
+    case 1: return 'MouseMiddle'
+    case 2: return 'MouseRight'
+    case 3: return 'MouseX1'
+    case 4: return 'MouseX2'
+    default: return null
+  }
+}
+
+function withMods(e: MouseEvent | WheelEvent, key: string): string {
+  const parts: string[] = []
+  if (e.ctrlKey) parts.push('Ctrl')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+  if (e.metaKey) parts.push('Win')
+  parts.push(key)
+  return parts.join('+')
+}
+
 const PRETTY: Record<string, string> = {
   Backquote: '`',
   BracketLeft: '[',
@@ -94,7 +144,16 @@ const PRETTY: Record<string, string> = {
   Period: '.',
   Slash: '/',
   Minus: '-',
-  Equal: '='
+  Equal: '=',
+  MouseLeft: 'Mouse L',
+  MouseRight: 'Mouse R',
+  MouseMiddle: 'Mouse M',
+  MouseX1: 'Mouse X1',
+  MouseX2: 'Mouse X2',
+  WheelUp: 'Wheel ↑',
+  WheelDown: 'Wheel ↓',
+  WheelLeft: 'Wheel ←',
+  WheelRight: 'Wheel →'
 }
 
 export function prettify(accelerator: string): string {

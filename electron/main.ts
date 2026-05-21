@@ -3,10 +3,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { store } from './store.js'
 import { InputEngine } from './engine/input.js'
+import { Recorder } from './engine/recorder.js'
 import { expandHotstring, runActions } from './actions.js'
 import { getActiveWindow } from './engine/active-window.js'
 import { sendKeys } from './output/keyboard.js'
-import type { AppSettings, BindResult, EngineStatus, Hotstring, Macro, MacroAction, Remap } from './types.js'
+import type { AppSettings, BindResult, EngineStatus, Hotstring, Macro, MacroAction, RecorderStatus, Remap } from './types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -14,8 +15,18 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let engine: InputEngine | null = null
+let recorder: Recorder | null = null
 let macroFailedIds: string[] = []
 let remapFailedIds: string[] = []
+
+function pushRecorderStatus(): void {
+  if (!mainWindow || mainWindow.isDestroyed() || !recorder) return
+  const status: RecorderStatus = {
+    recording: recorder.isRecording(),
+    eventCount: recorder.eventCount()
+  }
+  mainWindow.webContents.send('recorder:update', status)
+}
 
 function pushStatus(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -150,8 +161,7 @@ function startEngine(): void {
       void expandHotstring(match.deleteCount, match.insert)
     },
     onRemapFire: (remap: Remap) => {
-      // Best-effort remap: send the target accelerator. The source key still
-      // reaches the focused app because uiohook-napi can't suppress events.
+      // Source key is suppressed by the native LL hook; send the target.
       sendKeys(remap.to).catch(() => {})
     },
     onSuspendToggle: () => setSuspended(!store.getSettings().suspended)
@@ -159,6 +169,52 @@ function startEngine(): void {
   engine.start()
   engine.setSuspended(store.getSettings().suspended)
   rebindEverything()
+  recorder = new Recorder()
+}
+
+function startRecording(): void {
+  if (!engine || !recorder) return
+  if (recorder.isRecording()) return
+  recorder.start()
+  let count = 0
+  engine.setRawHandler((e) => {
+    // Esc-keydown stops recording without being captured.
+    if (e.kind === 'key' && !e.up && e.vk === 0x1b) {
+      void stopRecording()
+      return true
+    }
+    const accepted = recorder!.push({
+      kind: e.kind,
+      vk: e.vk,
+      mods: e.mods,
+      up: e.up,
+      x: e.x,
+      y: e.y,
+      wheelDelta: e.wheelDelta
+    })
+    if (accepted) {
+      count++
+      // Throttle UI updates to ~10/s.
+      if (count % 5 === 0) pushRecorderStatus()
+    }
+    return accepted
+  })
+  pushRecorderStatus()
+}
+
+function stopRecording(): MacroAction[] {
+  if (!engine || !recorder || !recorder.isRecording()) return []
+  const actions = recorder.stop()
+  engine.setRawHandler(null)
+  pushRecorderStatus()
+  return actions
+}
+
+function cancelRecording(): void {
+  if (!engine || !recorder || !recorder.isRecording()) return
+  recorder.cancel()
+  engine.setRawHandler(null)
+  pushRecorderStatus()
 }
 
 function registerIpc(): void {
@@ -228,6 +284,19 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('app:hide', () => mainWindow?.hide())
+
+  ipcMain.handle('recorder:start', () => {
+    startRecording()
+    return { recording: recorder?.isRecording() ?? false, eventCount: recorder?.eventCount() ?? 0 }
+  })
+  ipcMain.handle('recorder:stop', (): MacroAction[] => stopRecording())
+  ipcMain.handle('recorder:cancel', () => {
+    cancelRecording()
+  })
+  ipcMain.handle('recorder:status', (): RecorderStatus => ({
+    recording: recorder?.isRecording() ?? false,
+    eventCount: recorder?.eventCount() ?? 0
+  }))
 }
 
 const gotLock = app.requestSingleInstanceLock()

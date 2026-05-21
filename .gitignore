@@ -6,6 +6,8 @@ package-lock.json.bak
 out/
 dist/
 release/
+native/mano-hook/build/
+native/mano-hook/prebuilds/
 *.local
 
 # Editor

@@ -1,0 +1,22 @@
+{
+  "name": "mano-hook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Low-level Windows keyboard hook with native-side suppression for Mano Hotkeys",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "install": "node -e \"process.exit(0)\"",
+    "rebuild": "node-gyp rebuild",
+    "build": "node-gyp-build",
+    "prebuild": "prebuildify --napi --strip"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.3.0",
+    "node-gyp-build": "^4.8.4"
+  },
+  "devDependencies": {
+    "node-gyp": "^11.0.0",
+    "prebuildify": "^6.0.1"
+  }
+}

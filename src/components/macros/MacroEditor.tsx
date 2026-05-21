@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { Macro } from '../../types'
+import { useEffect, useState } from 'react'
+import type { Macro, RecorderStatus } from '../../types'
 import { api } from '../../api'
 import { HotkeyCapture } from '../HotkeyCapture'
 import { Play, Trash } from '../Icons'
@@ -16,8 +16,25 @@ interface Props {
 
 export function MacroEditor({ macro, failed, onChange, onDelete }: Props) {
   const [testing, setTesting] = useState(false)
+  const [recorder, setRecorder] = useState<RecorderStatus>({ recording: false, eventCount: 0 })
+
+  useEffect(() => {
+    void api.recorderStatus().then(setRecorder)
+    return api.onRecorderUpdate(setRecorder)
+  }, [])
 
   const patch = (p: Partial<Macro>) => onChange({ ...macro, ...p, updatedAt: Date.now() })
+
+  const startRecord = async () => {
+    setRecorder(await api.recorderStart())
+  }
+  const stopRecord = async () => {
+    const actions = await api.recorderStop()
+    if (actions.length) patch({ actions: [...macro.actions, ...actions] })
+  }
+  const cancelRecord = async () => {
+    await api.recorderCancel()
+  }
 
   const runTest = async () => {
     setTesting(true)
@@ -76,7 +93,38 @@ export function MacroEditor({ macro, failed, onChange, onDelete }: Props) {
         </section>
 
         <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-500">Actions</h3>
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">Actions</h3>
+            {!recorder.recording ? (
+              <button
+                onClick={startRecord}
+                className="flex items-center gap-1.5 rounded-md border border-ink-800 bg-ink-900 px-2.5 py-1 text-xs text-ink-200 transition hover:border-rose-500/60 hover:text-rose-400"
+                title="Record key + mouse input, append as actions"
+              >
+                <span className="h-2 w-2 rounded-full bg-rose-500/70" />
+                Record
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 rounded-md border border-rose-500/60 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-300">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
+                  Recording · {recorder.eventCount} events · Esc to stop
+                </span>
+                <button
+                  onClick={stopRecord}
+                  className="rounded-md border border-ink-800 bg-ink-900 px-2.5 py-1 text-xs text-ink-200 transition hover:border-accent-500/60 hover:text-accent-400"
+                >
+                  Stop &amp; append
+                </button>
+                <button
+                  onClick={cancelRecord}
+                  className="rounded-md border border-ink-800 bg-ink-900 px-2.5 py-1 text-xs text-ink-400 transition hover:border-ink-700 hover:text-ink-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
           <ActionList actions={macro.actions} onChange={(actions) => patch({ actions })} />
         </section>
       </div>

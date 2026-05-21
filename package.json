@@ -14,12 +14,13 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "rebuild:native": "npm --prefix native/mano-hook run rebuild && electron-builder install-app-deps",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder"
   },
   "dependencies": {
     "electron-store": "^8.2.0",
-    "uiohook-napi": "^1.5.5"
+    "mano-hook": "file:./native/mano-hook"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
@@ -48,19 +49,25 @@
       "resources/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/mano-hook/**/*"
+    ],
     "win": {
       "target": [
         {
-          "target": "nsis",
+          "target": "msi",
           "arch": [
             "x64"
           ]
         }
       ]
     },
-    "nsis": {
+    "msi": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }

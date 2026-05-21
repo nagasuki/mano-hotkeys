@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { eventToAccelerator, prettify } from '../lib/accelerator'
+import {
+  eventToAccelerator,
+  mouseEventToAccelerator,
+  prettify,
+  wheelEventToAccelerator
+} from '../lib/accelerator'
 import { Keyboard } from './Icons'
 
 interface Props {
@@ -14,7 +19,11 @@ export function HotkeyCapture({ value, onChange, invalid }: Props) {
 
   useEffect(() => {
     if (!capturing) return
-    const handler = (e: KeyboardEvent) => {
+
+    const insideButton = (target: EventTarget | null): boolean =>
+      !!ref.current && ref.current.contains(target as Node)
+
+    const onKey = (e: KeyboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
       if (e.key === 'Escape') {
@@ -26,19 +35,47 @@ export function HotkeyCapture({ value, onChange, invalid }: Props) {
       onChange(accel)
       setCapturing(false)
     }
-    window.addEventListener('keydown', handler, { capture: true })
-    return () => window.removeEventListener('keydown', handler, { capture: true } as any)
-  }, [capturing, onChange])
 
-  // Click-outside to cancel capture
-  useEffect(() => {
-    if (!capturing) return
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setCapturing(false)
+    const onMouseDown = (e: MouseEvent) => {
+      // Click inside the trigger button cancels capture; anywhere else binds.
+      if (insideButton(e.target)) {
+        setCapturing(false)
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      const accel = mouseEventToAccelerator(e)
+      if (!accel) return
+      onChange(accel)
+      setCapturing(false)
     }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [capturing])
+
+    const onWheel = (e: WheelEvent) => {
+      if (insideButton(e.target)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const accel = wheelEventToAccelerator(e)
+      if (!accel) return
+      onChange(accel)
+      setCapturing(false)
+    }
+
+    const onContextMenu = (e: MouseEvent) => {
+      // Stop the OS menu from eating right-click captures.
+      e.preventDefault()
+    }
+
+    window.addEventListener('keydown', onKey, { capture: true })
+    window.addEventListener('mousedown', onMouseDown, { capture: true })
+    window.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    window.addEventListener('contextmenu', onContextMenu, { capture: true })
+    return () => {
+      window.removeEventListener('keydown', onKey, { capture: true } as any)
+      window.removeEventListener('mousedown', onMouseDown, { capture: true } as any)
+      window.removeEventListener('wheel', onWheel, { capture: true } as any)
+      window.removeEventListener('contextmenu', onContextMenu, { capture: true } as any)
+    }
+  }, [capturing, onChange])
 
   return (
     <div className="flex items-center gap-2">
@@ -57,7 +94,7 @@ export function HotkeyCapture({ value, onChange, invalid }: Props) {
         <span className="flex items-center gap-2">
           <Keyboard className="text-ink-500" />
           {capturing ? (
-            <span className="text-ink-400">Press a key combination… (Esc to cancel)</span>
+            <span className="text-ink-400">Press a key, click, or scroll… (Esc to cancel)</span>
           ) : value ? (
             <span>{prettify(value)}</span>
           ) : (
